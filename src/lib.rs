@@ -72,8 +72,8 @@ impl log::Log for Logger {
 }
 
 type size_t = usize;
-use std::ffi::c_void;
-use std::os::raw::c_int;
+use std::ffi::{c_void};
+use std::os::raw::{c_int, c_char};
 
 /** https://man7.org/linux/man-pages/man2/readv.2.html#DESCRIPTION
 ```c
@@ -101,44 +101,55 @@ impl From<&str> for iovec {
 
 extern "C" {
     /// https://man7.org/linux/man-pages/man3/sd_journal_send.3.html
+    /// https://man7.org/linux/man-pages/man7/systemd.journal-fields.7.html
+    /// https://github.com/jmesmon/rust-systemd/blob/master/libsystemd-sys/src/journal.rs
     /// int sd_journal_sendv(const struct iovec *iov, int n);
     fn sd_journal_sendv(iov: *const iovec, n: c_int) -> c_int;
+    /// int sd_journal_send(const char *format, ...);
+    //fn sd_journal_send(format: *const c_char, ...);
+    fn sd_journal_send(priority: *const c_char, message: *const c_char) -> c_int;
 }
 
-struct LoggerSystemd {
+/**
+遇到知识盲区了，调用systemd的sd_journal_sendv API需要传入iovec类型的数组
+如果iovec数组内有个成员是通过 String::as_str().into() 转换的话，则API会调用失败。
+我看rust-systemd源码用AsRef::as_ref将String转&str没有用as_str
+为什么调用as_str()再取原始指针就不行呢？
+
+
+*/
+struct LoggerSystemdTest {
     systemd_unit: iovec
 }
 
-impl LoggerSystemd {
+impl LoggerSystemdTest {
     fn new(systemd_unit_name: &str) -> Self {
         Self {
             systemd_unit: format!("TARGET={}\0", systemd_unit_name).as_str().into()
         }
     }
 
-    /**
-遇到知识盲区了，调用systemd的sd_journal_sendv API需要传入iovec类型的数组
-如果iovec数组内有个成员是通过 String::as_str().into() 转换的话，则API会调用失败。
-
-我看rust-systemd源码用AsRef::as_ref将String转&str没有用as_str
-为什么调用as_str()再取原始指针就不行呢？
-    */
     fn log2(&self) {
         let priority_iovec: iovec = "PRIORITY=3".into();
-        // 错误写法: format!().as_str().into::<iovec>()不能正确得到字符串地址
+        // 错误写法: `format!("").as_str().into::<iovec>()` 或 `"MESSAGE=log1".to_string().as_str().into()`
+        // 不能正确得到字符串地址
         let msg_iovec: iovec = "MESSAGE=log1".to_string().as_str().into();
         // ok: let msg_iovec: iovec = "MESSAGE=log1".into();
         let iovecs = vec![priority_iovec, msg_iovec];
 
-        let ret: Vec<iovec> = vec!["PRIORITY=3", "MESSAGE=log2"].into_iter().map(|x| x.into()).collect();
+        let ret: Vec<iovec> = vec!["PRIORITY=3", "MESSAGE=log2", "UNIT=api"].into_iter().map(|x| x.into()).collect();
         unsafe {
-            sd_journal_sendv(iovecs.as_ptr(), iovecs.len() as c_int);
-            sd_journal_sendv(ret.as_ptr(), ret.len() as c_int);
+            //sd_journal_sendv(iovecs.as_ptr(), iovecs.len() as c_int);
+            //sd_journal_sendv(ret.as_ptr(), ret.len() as c_int);
+        }
+
+        unsafe {
+            sd_journal_send("PRIORITY=3\0".as_ptr() as *const _, "MESSAGE=hello\0".as_ptr() as *const _);
         }
     }
 }
 #[test]
 fn feature() {
-    let logger = LoggerSystemd::new("api");
+    let logger = LoggerSystemdTest::new("api");
     logger.log2();
 }
