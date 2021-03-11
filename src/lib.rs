@@ -70,3 +70,75 @@ impl log::Log for Logger {
 
     fn flush(&self) {}
 }
+
+type size_t = usize;
+use std::ffi::c_void;
+use std::os::raw::c_int;
+
+/** https://man7.org/linux/man-pages/man2/readv.2.html#DESCRIPTION
+```c
+struct iovec {
+    void  *iov_base;    /* Starting address */
+    size_t iov_len;     /* Number of bytes to transfer */
+};
+```
+*/
+#[derive(Clone, Debug)]
+#[repr(C)]
+struct iovec {
+    iov_base: *const c_void,
+    iov_len: size_t
+}
+
+impl From<&str> for iovec {
+    fn from(s: &str) -> Self {
+        Self {
+            iov_base: s.as_ptr() as *const c_void,
+            iov_len: s.len() as size_t
+        }
+    }
+}
+
+extern "C" {
+    /// https://man7.org/linux/man-pages/man3/sd_journal_send.3.html
+    /// int sd_journal_sendv(const struct iovec *iov, int n);
+    fn sd_journal_sendv(iov: *const iovec, n: c_int) -> c_int;
+}
+
+struct LoggerSystemd {
+    systemd_unit: iovec
+}
+
+impl LoggerSystemd {
+    fn new(systemd_unit_name: &str) -> Self {
+        Self {
+            systemd_unit: format!("TARGET={}\0", systemd_unit_name).as_str().into()
+        }
+    }
+
+    /**
+遇到知识盲区了，调用systemd的sd_journal_sendv API需要传入iovec类型的数组
+如果iovec数组内有个成员是通过 String::as_str().into() 转换的话，则API会调用失败。
+
+我看rust-systemd源码用AsRef::as_ref将String转&str没有用as_str
+为什么调用as_str()再取原始指针就不行呢？
+    */
+    fn log2(&self) {
+        let priority_iovec: iovec = "PRIORITY=3".into();
+        // 错误写法: format!().as_str().into::<iovec>()不能正确得到字符串地址
+        let msg_iovec: iovec = "MESSAGE=log1".to_string().as_str().into();
+        // ok: let msg_iovec: iovec = "MESSAGE=log1".into();
+        let iovecs = vec![priority_iovec, msg_iovec];
+
+        let ret: Vec<iovec> = vec!["PRIORITY=3", "MESSAGE=log2"].into_iter().map(|x| x.into()).collect();
+        unsafe {
+            sd_journal_sendv(iovecs.as_ptr(), iovecs.len() as c_int);
+            sd_journal_sendv(ret.as_ptr(), ret.len() as c_int);
+        }
+    }
+}
+#[test]
+fn feature() {
+    let logger = LoggerSystemd::new("api");
+    logger.log2();
+}
