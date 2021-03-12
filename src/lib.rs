@@ -1,24 +1,68 @@
-use std::os::raw::{c_int, c_char};
-/// Rust logger for systemd-journal
-/// Only target_os=linux will use systemd API, other os just print to STDOUT
-pub struct Logger {
-    log_level: log::Level,
+#[cfg(target_os = "linux")]
+use std::os::raw::{c_char, c_int};
+
+/**
+## libsystemd reference
+- https://man7.org/linux/man-pages/man3/sd_journal_send.3.html
+- https://man7.org/linux/man-pages/man7/systemd.journal-fields.7.html
+- http://0pointer.de/blog/projects/journal-submit.html
+- https://github.com/jmesmon/rust-systemd/blob/master/libsystemd-sys/src/journal.rs
+*/
+#[cfg(target_os = "linux")]
+#[link(name = "systemd", kind = "dylib")]
+extern "C" {
+    //fn sd_journal_send(format: *const c_char, ...);
+    fn sd_journal_send(
+        priority: *const c_char,
+        message: *const c_char,
+        terminator: *const c_char,
+    ) -> c_int;
 }
 
-impl Logger {
-    pub fn with_level(log_level: log::Level) -> Self {
-        Self { log_level }
+#[cfg(target_os = "linux")]
+#[repr(u8)]
+enum JournalPriority {
+    // Emerg = 0,
+    // Alert = 1,
+    // Crit = 2,
+    Err = 3,
+    Warning = 4,
+    // Notice = 5,
+    Info = 6,
+    Debug = 7,
+}
+
+#[cfg(target_os = "linux")]
+impl From<log::Level> for JournalPriority {
+    fn from(log_level: log::Level) -> Self {
+        match log_level {
+            log::Level::Error => Self::Err,
+            log::Level::Warn => Self::Warning,
+            log::Level::Info => Self::Info,
+            log::Level::Debug | log::Level::Trace => Self::Debug,
+        }
     }
+}
+
+/// Rust logger for systemd-journal
+/// Only target_os=linux will use systemd API, other os just print to STDOUT
+pub struct Logger;
+
+impl Logger {
     pub fn init(self) {
-        // log::Level::Error=1, log::Level::Trace=5
-        log::set_max_level(self.log_level.to_level_filter());
+        if !cfg!(target_os = "linux") {
+            eprintln!("warning: journal_logger use libsystemd.so is only support on Linux");
+        }
+        log::set_max_level(log::Level::Trace.to_level_filter());
         log::set_boxed_logger(Box::new(self)).expect("logger has init");
     }
 }
 
 impl log::Log for Logger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= self.log_level
+    /// use journalctl's -p argument to filter by log_level
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        //metadata.level() <= self.log_level
+        true
     }
 
     fn log(&self, record: &log::Record) {
@@ -30,7 +74,7 @@ impl log::Log for Logger {
         if file_str_len > 30 {
             file = &file[file_str_len - 30..file_str_len];
         }
-        println!(
+        let log_message = format!(
             "{:<5}[{},{}:{}] {}",
             record.level(),
             record.module_path_static().unwrap_or_default(),
@@ -38,22 +82,33 @@ impl log::Log for Logger {
             record.line().unwrap_or_default(),
             record.args()
         );
+        if cfg!(target_os = "linux") {
+            let priority: JournalPriority = record.level().into();
+            let priority_str = format!("PRIORITY={}\0", priority as u8);
+            let message_str = format!("MESSAGE={}\0", log_message);
+            unsafe {
+                sd_journal_send(
+                    priority_str.as_ptr() as *const c_char,
+                    message_str.as_ptr() as *const c_char,
+                    std::ptr::null() as *const c_char,
+                );
+            }
+        } else {
+            println!("{}", log_message);
+        }
     }
 
     fn flush(&self) {}
 }
 
-/**
-## libsystemd reference
-- https://man7.org/linux/man-pages/man3/sd_journal_send.3.html
-- https://man7.org/linux/man-pages/man7/systemd.journal-fields.7.html
-- http://0pointer.de/blog/projects/journal-submit.html
-- https://github.com/jmesmon/rust-systemd/blob/master/libsystemd-sys/src/journal.rs
-*/
-#[link(name = "systemd", kind="dylib")]
-extern "C" {
-    //fn sd_journal_send(format: *const c_char, ...);
-    fn sd_journal_send(priority: *const c_char, message: *const c_char, terminator: *const c_char) -> c_int;
+#[test]
+fn test_logger() {
+    Logger.init();
+    log::trace!("log_level=trace");
+    log::debug!("log_level=debug");
+    log::info!("log_level=info");
+    log::warn!("log_level=warn");
+    log::error!("log_level=error");
 }
 
 #[test]
@@ -62,7 +117,7 @@ fn test_sd_journal_send() {
         sd_journal_send(
             "PRIORITY=4\0".as_ptr() as *const c_char,
             "MESSAGE=hello\0".as_ptr() as *const c_char,
-            std::ptr::null() as *const c_char
+            std::ptr::null() as *const c_char,
         );
     }
 }
@@ -71,7 +126,7 @@ fn test_sd_journal_send() {
 mod test_sd_journal_sendv {
     use std::os::raw::{c_int, c_void};
 
-    #[link(name = "systemd", kind="dylib")]
+    #[link(name = "systemd", kind = "dylib")]
     extern "C" {
         fn sd_journal_sendv(iov: *const iovec, n: c_int) -> c_int;
     }
@@ -92,14 +147,14 @@ mod test_sd_journal_sendv {
     #[repr(C)]
     struct iovec {
         iov_base: *const c_void,
-        iov_len: usize
+        iov_len: usize,
     }
 
     impl From<&str> for iovec {
         fn from(s: &str) -> Self {
             Self {
                 iov_base: s.as_ptr() as *const c_void,
-                iov_len: s.len()
+                iov_len: s.len(),
             }
         }
     }
@@ -107,12 +162,16 @@ mod test_sd_journal_sendv {
     #[test]
     fn test_sd_journal_sendv() {
         let priority_iovec: iovec = "PRIORITY=3".into();
-        // 错误写法: `format!("").as_str().into::<iovec>()` 或 `"MESSAGE=log1".to_string().as_str().into()`
+        // 错误写法: `format!("").as_str().into()` 或 `"MESSAGE=log1".to_string().as_str().into()`
         // 错误写法不能正确得到字符串地址
-        let msg_iovec: iovec = "MESSAGE=log1".into();
+        // 正确写法: let msg_iovec: iovec = "MESSAGE=log1".into();
+        let msg_iovec: iovec = format!("MESSAGE={}", "log1").as_str().into();
         let iovecs = vec![priority_iovec, msg_iovec];
 
-        let ret: Vec<iovec> = vec!["PRIORITY=3", "MESSAGE=log2", "UNIT=api"].into_iter().map(|x| x.into()).collect();
+        let ret: Vec<iovec> = vec!["PRIORITY=3", "MESSAGE=log2", "UNIT=api"]
+            .into_iter()
+            .map(|x| x.into())
+            .collect();
         unsafe {
             sd_journal_sendv(iovecs.as_ptr(), iovecs.len() as c_int);
             sd_journal_sendv(ret.as_ptr(), ret.len() as c_int);
