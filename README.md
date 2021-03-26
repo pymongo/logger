@@ -1,5 +1,19 @@
 # Rust logger for systemd-journald
 
+## check your os whether install libsystemd.so
+
+> gcc -lsystemd main.c
+
+If libsystemd.so is not installed
+
+Debian/Ubuntu:
+
+> sudo apt install libsystemd-dev
+
+centOS:
+
+> sudo yum install systemd-devel
+
 ## logger output example
 ```text
 [w@w-manjaro journal]$ journalctl --no-hostname -uapi -pinfo --no-pager -n 50
