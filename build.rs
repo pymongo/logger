@@ -1,5 +1,6 @@
+#[cfg(not(target_os="linux"))]
+compile_error!("libsystemd.so only support on linux");
+
 fn main() {
-    if cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-lib=dylib=systemd");
-    }
+    println!("cargo:rustc-link-lib=dylib=systemd");
 }

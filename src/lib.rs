@@ -1,4 +1,3 @@
-#[cfg(target_os = "linux")]
 use std::os::raw::{c_char, c_int};
 
 /**
@@ -8,7 +7,6 @@ use std::os::raw::{c_char, c_int};
 - http://0pointer.de/blog/projects/journal-submit.html
 - https://github.com/jmesmon/rust-systemd/blob/master/libsystemd-sys/src/journal.rs
 */
-#[cfg(target_os = "linux")]
 #[link(name = "systemd", kind = "dylib")]
 extern "C" {
     //fn sd_journal_send(format: *const c_char, ...);
@@ -19,7 +17,6 @@ extern "C" {
     ) -> c_int;
 }
 
-#[cfg(target_os = "linux")]
 #[repr(u8)]
 enum JournalPriority {
     // Emerg = 0,
@@ -32,7 +29,6 @@ enum JournalPriority {
     Debug = 7,
 }
 
-#[cfg(target_os = "linux")]
 impl From<log::Level> for JournalPriority {
     fn from(log_level: log::Level) -> Self {
         match log_level {
@@ -82,19 +78,16 @@ impl log::Log for Logger {
             record.line().unwrap_or_default(),
             record.args()
         );
-        if cfg!(target_os = "linux") {
-            let priority: JournalPriority = record.level().into();
-            let priority_str = format!("PRIORITY={}\0", priority as u8);
-            let message_str = format!("MESSAGE={}\0", log_message);
-            unsafe {
-                sd_journal_send(
-                    priority_str.as_ptr() as *const c_char,
-                    message_str.as_ptr() as *const c_char,
-                    std::ptr::null() as *const c_char,
-                );
-            }
-        } else {
-            println!("{}", log_message);
+
+        let priority: JournalPriority = record.level().into();
+        let priority_str = format!("PRIORITY={}\0", priority as u8);
+        let message_str = format!("MESSAGE={}\0", log_message);
+        unsafe {
+            sd_journal_send(
+                priority_str.as_ptr() as *const c_char,
+                message_str.as_ptr() as *const c_char,
+                std::ptr::null() as *const c_char,
+            );
         }
     }
 
