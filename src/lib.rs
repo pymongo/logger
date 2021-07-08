@@ -1,3 +1,10 @@
+#![warn(clippy::nursery, clippy::pedantic)]
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::doc_markdown,
+    clippy::non_ascii_literal
+)]
 use std::os::raw::{c_char, c_int};
 
 /**
@@ -9,7 +16,7 @@ use std::os::raw::{c_char, c_int};
 */
 #[link(name = "systemd", kind = "dylib")]
 extern "C" {
-    //fn sd_journal_send(format: *const c_char, ...);
+    /// fn sd_journal_send(format: *const c_char, ...);
     fn sd_journal_send(
         priority: *const c_char,
         message: *const c_char,
@@ -84,9 +91,9 @@ impl log::Log for Logger {
         let message_str = format!("MESSAGE={}\0", log_message);
         unsafe {
             sd_journal_send(
-                priority_str.as_ptr() as *const c_char,
-                message_str.as_ptr() as *const c_char,
-                std::ptr::null() as *const c_char,
+                priority_str.as_ptr().cast(),
+                message_str.as_ptr().cast(),
+                "\0".as_ptr().cast(),
             );
         }
     }
@@ -108,9 +115,9 @@ fn test_logger() {
 fn test_sd_journal_send() {
     unsafe {
         sd_journal_send(
-            "PRIORITY=4\0".as_ptr() as *const c_char,
-            "MESSAGE=hello\0".as_ptr() as *const c_char,
-            std::ptr::null() as *const c_char,
+            "PRIORITY=4\0".as_ptr().cast(),
+            "MESSAGE=hello\0".as_ptr().cast(),
+            std::ptr::null::<*const c_char>().cast(),
         );
     }
 }
@@ -146,7 +153,7 @@ mod test_sd_journal_sendv {
     impl From<&str> for iovec {
         fn from(s: &str) -> Self {
             Self {
-                iov_base: s.as_ptr() as *const c_void,
+                iov_base: s.as_ptr().cast(),
                 iov_len: s.len(),
             }
         }
