@@ -24,26 +24,16 @@ extern "C" {
     ) -> c_int;
 }
 
-#[repr(u8)]
-enum JournalPriority {
-    // Emerg = 0,
-    // Alert = 1,
-    // Crit = 2,
-    Err = 3,
-    Warning = 4,
-    // Notice = 5,
-    Info = 6,
-    Debug = 7,
-}
-
-impl From<log::Level> for JournalPriority {
-    fn from(log_level: log::Level) -> Self {
-        match log_level {
-            log::Level::Error => Self::Err,
-            log::Level::Warn => Self::Warning,
-            log::Level::Info => Self::Info,
-            log::Level::Debug | log::Level::Trace => Self::Debug,
-        }
+pub fn rust_log_level_to_syslog_rpiority(log_level: log::Level) -> libc::c_int {
+    match log_level {
+        // LOG_EMERG = 0
+        // LOG_ALERT = 1
+        // LOG_CRIT = 2
+        log::Level::Error => libc::LOG_ERR,    // 4
+        log::Level::Warn => libc::LOG_WARNING, // 5
+        // LOG_NOTIC = 6
+        log::Level::Info => libc::LOG_INFO, // 7
+        log::Level::Debug | log::Level::Trace => libc::LOG_DEBUG, // 8
     }
 }
 
@@ -86,8 +76,8 @@ impl log::Log for Logger {
             record.args()
         );
 
-        let priority: JournalPriority = record.level().into();
-        let priority_str = format!("PRIORITY={}\0", priority as u8);
+        let priority = rust_log_level_to_syslog_rpiority(record.level());
+        let priority_str = format!("PRIORITY={}\0", priority);
         let message_str = format!("MESSAGE={}\0", log_message);
         unsafe {
             sd_journal_send(
